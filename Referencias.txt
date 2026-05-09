@@ -1,0 +1,1 @@
+Trabalho baseado na documentação disponível no repositório: <https://github.com/MobilityData/gbfs/blob/master/gbfs.md#vehicle_statusjson>. Última consulta em 09/05/2026
