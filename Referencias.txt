@@ -1,0 +1,6 @@
+Alternativas exploradas: 
+- Steam BR: <https://github.com/germanojorge/SteamBR>
+- CityBikeNYI: <https://citibikenyc.com/system-data>
+Trabalho baseado na documentação disponível no repositório: <https://github.com/MobilityData/gbfs/blob/master/gbfs.md#vehicle_statusjson>. Última consulta em 09/05/2026
+Miro: Dinâmicas e Brainstorm <https://miro.com/welcomeonboard/aXZGQ3NQMUVTWldCTGppUGRzdU01UDJEUVFLeU44OUNkaENqV0U4RWYxclRrYS96TVBrMWJnbE82b09xb0didXdEYXp0emh6TjlwTTBXRTI4T3d1aVdjSWNDVWVtM2sreVJSVzdHU3lRaFVlc3BNTEFoUG5pLzlTMkNqQkJZZyt3VHhHVHd5UWtSM1BidUtUYmxycDRnPT0hdjE=?share_link_id=753649966810>
+Drive: notebooks https://drive.google.com/drive/folders/1ZYemEAOjcZ0-ksDOZWQQg40CKRKg899I?usp=drive_link
