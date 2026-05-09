@@ -1,0 +1,53 @@
+┌─────────────────────────────────────────────────────────────────┐
+│                        FONTES EXTERNAS                          │
+├────────────────────────┬────────────────────────────────────────┤
+│  GBFS Real-Time        │  Trip History (S3 AWS)                 │
+│  CitiBike NYC          │  s3.amazonaws.com/tripdata/            │
+│  • station_status      │  • YYYYMM-citibike-tripdata.zip        │
+│  • station_information │  • Jan–Abr 2026                        │
+└──────────┬─────────────┴──────────────────┬─────────────────────┘
+           │ a cada 5 min                    │ incremental (mensal)
+           ▼                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              citibike-ingest  (python:3.11-slim, 128m)          │
+│  fetch_citibike.py  →  loop principal 300s                      │
+│  fetch_trips.py     →  sync_trips() chamado a cada ciclo        │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ hdfs://namenode:9000
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│               HADOOP HDFS  (hadoop 3.2.1)                       │
+│                                                                 │
+│  /citibike/station_status/  ← JSONs por snapshot (5min)         │
+│  /citibike/station_info/    ← JSONs por snapshot (5min)         │
+│  /citibike/trips/           ← CSVs históricos Jan-Abr 2026      │
+│  /citibike/processed/       ← outputs do Spark                  │
+│    ├── top_stations/                                            │
+│    └── estacoes_vazias/                                         │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+              ┌────────────────┴────────────────┐
+              ▼                                 ▼
+┌─────────────────────────┐    ┌────────────────────────────────┐
+│  SPARK  (3.5.1)         │    │  JUPYTER  (pyspark-notebook)   │
+│                         │    │                                │
+│  spark-master  :7077    │    │  notebooks/  :8888             │
+│  spark-worker-1 :8081   │    │  token: citibike               │
+│  spark-worker-2 :8082   │    │                                │
+│                         │    │  Análises:                     │
+│  analyze_citibike.py    │    │  • join status + info          │
+│  → /citibike/processed/ │    │  • rotas trip history          │
+└─────────────────────────┘    └────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│         citibike-web  (python:3.11-slim, 256m)  :5000           │
+│         Streamlit Dashboard                                     │
+│                                                                 │
+│  • Mapa interativo das estações (Plotly)                        │
+│  • KPIs: bikes, e-bikes, vagas, snapshots                       │
+│  • Top 10 estações (Spark processed)                            │
+│  • Estações críticas / frequentemente vazias                    │
+│  • Histograma de distribuição                                   │
+│  • Cache TTL 300s (alinhado à coleta)                           │
+└─────────────────────────────────────────────────────────────────┘
