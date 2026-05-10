@@ -19,6 +19,9 @@ services:
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    ports:
+      - "9866:9866"
+      - "9864:9864"
     container_name: datanode
     hostname: datanode
     restart: always

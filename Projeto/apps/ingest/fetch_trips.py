@@ -8,6 +8,8 @@ import io
 import time
 from datetime import datetime, timezone
 from hdfs import InsecureClient
+import sys
+sys.stdout.reconfigure(line_buffering=True)
 
 BASE_URL = "https://s3.amazonaws.com/tripdata/{month}-citibike-tripdata.zip"
 HDFS_URL = "http://namenode:9870"
