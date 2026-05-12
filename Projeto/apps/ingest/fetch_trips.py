@@ -117,3 +117,6 @@ def sync_trips():
         print(f"[{now.strftime('%H:%M:%S')}] ✓ Nenhum arquivo novo nos trips")
     else:
         print(f"[{now.strftime('%H:%M:%S')}] ✅ {new_downloads} arquivo(s) adicionados ao HDFS")
+
+if __name__ == "__main__":
+    sync_trips()

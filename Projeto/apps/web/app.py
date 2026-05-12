@@ -17,8 +17,9 @@ st.set_page_config(
 )
 
 HDFS_URL  = "http://namenode:9870"
-HDFS_RAW  = "/citibike/raw"
-HDFS_PROC = "/citibike/processed"
+HDFS_STATUS = "/citibike/station_status"
+HDFS_INFO   = "/citibike/station_info"
+HDFS_PROC   = "/citibike/processed"
 
 # ─── Conexão HDFS (cached para não reconectar a cada refresh) ─────────────────
 @st.cache_resource
@@ -31,19 +32,48 @@ client = get_hdfs_client()
 @st.cache_data(ttl=300)  # cache por 5 minutos — mesma frequência da coleta
 def carregar_ultimo_snapshot():
     """
-    Lê o arquivo JSON mais recente do HDFS.
-    cache_data evita reler o HDFS a cada interação do usuário.
+    Lê station_status + station_info do HDFS e faz merge.
+    Retorna DataFrame com: station_id, name, lat, lon, free_bikes, empty_slots, ebikes
     """
     try:
-        arquivos = sorted(client.list(HDFS_RAW))
-        if not arquivos:
+        # 1. Carregar station_status (dados em tempo real)
+        arquivos_status = sorted(client.list(HDFS_STATUS))
+        if not arquivos_status:
             return pd.DataFrame()
-        with client.read(f"{HDFS_RAW}/{arquivos[-1]}") as f:
-            dados = json.load(f)
-        df = pd.DataFrame(dados)
-        df = df.rename(columns={"latitude": "lat", "longitude": "lon"})
-        df["free_bikes"]  = pd.to_numeric(df.get("free_bikes",  0), errors="coerce").fillna(0).astype(int)
-        df["empty_slots"] = pd.to_numeric(df.get("empty_slots", 0), errors="coerce").fillna(0).astype(int)
+
+        with client.read(f"{HDFS_STATUS}/{arquivos_status[-1]}") as f:
+            status_data = json.load(f)
+        df_status = pd.DataFrame(status_data)
+
+        # 2. Carregar station_info (metadados: nome, lat, lon)
+        arquivos_info = sorted(client.list(HDFS_INFO))
+        if not arquivos_info:
+            return pd.DataFrame()
+
+        with client.read(f"{HDFS_INFO}/{arquivos_info[-1]}") as f:
+            info_data = json.load(f)
+        df_info = pd.DataFrame(info_data)
+
+        # 3. Merge via station_id
+        df = pd.merge(
+            df_status,
+            df_info[["station_id", "name", "lat", "lon", "capacity"]],
+            on="station_id",
+            how="inner"
+        )
+
+        # 4. Renomear colunas para compatibilidade com código existente
+        df = df.rename(columns={
+            "num_bikes_available": "free_bikes",
+            "num_docks_available": "empty_slots",
+            "num_ebikes_available": "ebikes"
+        })
+
+        # 5. Garantir tipos corretos
+        df["free_bikes"]  = pd.to_numeric(df["free_bikes"],  errors="coerce").fillna(0).astype(int)
+        df["empty_slots"] = pd.to_numeric(df["empty_slots"], errors="coerce").fillna(0).astype(int)
+        df["ebikes"]      = pd.to_numeric(df["ebikes"],      errors="coerce").fillna(0).astype(int)
+
         return df
     except Exception as e:
         st.error(f"Erro ao ler HDFS: {e}")
@@ -86,18 +116,16 @@ with st.spinner("Carregando dados do HDFS..."):
     df_vazias  = carregar_processado("estacoes_vazias")
 
 if df.empty:
-    st.warning("Nenhum dado disponível no HDFS. Rode o script de ingestão primeiro.")
-    st.stop()
+    st.warning("⚠️ Nenhum snapshot de station_status disponível. Aguarde a próxima coleta (5 min) ou verifique o container citibike-ingest.")
+    st.info("Mapa e KPIs indisponíveis temporariamente. Gráficos de análise Spark (se disponíveis) serão exibidos abaixo.")
 
 # ─── KPIs ─────────────────────────────────────────────────────────────────────
 total_bikes  = int(df["free_bikes"].sum())
 total_vagas  = int(df["empty_slots"].sum())
-total_ebikes = int(df.get("extra", pd.Series(dtype=object)).apply(
-    lambda x: x.get("ebikes", 0) if isinstance(x, dict) else 0
-).sum()) if "extra" in df.columns else 0
+total_ebikes = int(df["ebikes"].sum()) if "ebikes" in df.columns else 0
 
 try:
-    snapshots = len(client.list(HDFS_RAW))
+    snapshots = len(client.list(HDFS_STATUS))
 except:
     snapshots = 0
 

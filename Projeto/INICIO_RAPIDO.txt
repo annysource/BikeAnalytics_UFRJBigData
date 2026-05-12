@@ -1,0 +1,95 @@
+================================================================================
+  🚴 BIKEANALYTICS - INÍCIO RÁPIDO
+================================================================================
+
+📋 COMANDOS ESSENCIAIS (copie e cole em ordem):
+
+1️⃣ ABRIR DOCKER DESKTOP
+   - Abra o Docker Desktop
+   - Aguarde ícone ficar verde
+
+2️⃣ NAVEGAR PARA A PASTA (Git Bash ou PowerShell)
+   cd "c:\Users\Usuário\Desktop\Pós\Big Data\Projeto\BikeAnalytics_UFRJBigData\Projeto"
+
+3️⃣ INICIAR TUDO
+   docker compose up -d
+
+4️⃣ AGUARDAR 2 MINUTOS
+   (abra um café ☕ enquanto os serviços inicializam)
+
+5️⃣ VERIFICAR STATUS
+   docker compose ps
+   (você deve ver 8 containers com status "Up")
+
+6️⃣ ABRIR NO NAVEGADOR
+   Dashboard:   http://localhost:5000
+   HDFS Web:    http://localhost:9870
+   Spark Web:   http://localhost:8080
+   Jupyter:     http://localhost:8888   (token: citibike)
+
+================================================================================
+
+✅ VERIFICAÇÃO RÁPIDA:
+
+# Ver quantos arquivos já foram coletados:
+curl -s "http://localhost:9870/webhdfs/v1/citibike/station_status?op=LISTSTATUS" | python3 -m json.tool | grep pathSuffix | wc -l
+
+# Ver logs em tempo real:
+docker compose logs -f ingest
+
+# Ver uso de recursos:
+docker stats --no-stream
+
+================================================================================
+
+🛑 PARAR TUDO:
+
+docker compose down
+
+================================================================================
+
+📚 MAIS INFORMAÇÕES:
+
+GUIA_EXECUCAO.md      - Guia completo detalhado (6 partes)
+COMANDOS_RAPIDOS.md   - Cola de comandos úteis
+CHECKLIST_INICIO.md   - Checklist de validação passo a passo
+README.md             - Documentação completa do projeto
+
+================================================================================
+
+🆘 PROBLEMAS COMUNS:
+
+Container não sobe?
+   docker compose logs [nome-do-container]
+   docker compose restart [nome-do-container]
+
+HDFS sem dados?
+   # Aguarde 5 minutos e verifique novamente
+   sleep 300
+   curl -s "http://localhost:9870/webhdfs/v1/citibike/station_status?op=LISTSTATUS" | python3 -m json.tool | grep pathSuffix | wc -l
+
+Recomeçar do zero (apaga dados!)?
+   docker compose down -v
+   docker compose up -d
+
+================================================================================
+
+🎯 SEQUÊNCIA COMPLETA (COPY/PASTE):
+
+cd "c:\Users\Usuário\Desktop\Pós\Big Data\Projeto\BikeAnalytics_UFRJBigData\Projeto"
+docker compose up -d
+sleep 120
+docker compose ps
+curl http://localhost:5000
+curl http://localhost:9870
+curl http://localhost:8080
+
+================================================================================
+
+🚀 PRONTO! Agora explore:
+   1. Dashboard Streamlit (localhost:5000) - Mapa e KPIs
+   2. HDFS Web UI (localhost:9870) - Dados brutos
+   3. Spark Web UI (localhost:8080) - Cluster de processamento
+   4. Jupyter (localhost:8888) - Análise exploratória
+
+================================================================================
