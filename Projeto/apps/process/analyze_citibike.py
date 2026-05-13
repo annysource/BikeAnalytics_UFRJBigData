@@ -20,7 +20,6 @@ from pyspark.sql.window import Window
 # ─── SparkSession ─────────────────────────────────────────────────────────────
 spark = SparkSession.builder \
     .appName("CitiBike Analysis") \
-    .master("local[*]") \
     .config("spark.hadoop.fs.defaultFS", "hdfs://namenode:9000") \
     .config("spark.hadoop.dfs.client.use.datanode.hostname", "true") \
     .config("spark.sql.shuffle.partitions", "8") \
@@ -99,7 +98,7 @@ resumo_mensal = df.groupBy("mes").agg(
     F.countDistinct("end_station_name").alias("estacoes_chegada_unicas")
 ).orderBy("mes")
 
-resumo_mensal.show(truncate=False)
+print("  ✓ resumo_mensal preparado")
 
 # ─── 4. Duração por tipo de usuário e mês ─────────────────────────────────────
 print("📊 [2/6] Duração por tipo de usuário...")
@@ -113,7 +112,7 @@ duracao_por_tipo = df.groupBy("mes", "member_casual").agg(
     spark_round(spark_max("duration_min"), 2).alias("max_min")
 ).orderBy("mes", "member_casual")
 
-duracao_por_tipo.show(truncate=False)
+print("  ✓ duracao_por_tipo preparado")
 
 # ─── 5. Distância por tipo de usuário e mês ───────────────────────────────────
 print("📊 [3/6] Distância por tipo de usuário...")
@@ -127,7 +126,7 @@ distancia_por_tipo = df.groupBy("mes", "member_casual").agg(
     spark_round(spark_max("distance_km"), 3).alias("max_km")
 ).orderBy("mes", "member_casual")
 
-distancia_por_tipo.show(truncate=False)
+print("  ✓ distancia_por_tipo preparado")
 
 # ─── 6. Top 20 estações de partida por mês ────────────────────────────────────
 print("📊 [4/6] Top estações de partida...")
@@ -144,7 +143,7 @@ top_partida = df.groupBy("mes", "start_station_name", "start_lat", "start_lng").
     .drop("rank") \
     .orderBy("mes", F.desc("viagens"))
 
-top_partida.show(5, truncate=False)
+print("  ✓ top_partida preparado")
 
 # ─── 7. Top 20 estações de chegada por mês ────────────────────────────────────
 print("📊 [5/6] Top estações de chegada...")
@@ -161,7 +160,7 @@ top_chegada = df.groupBy("mes", "end_station_name", "end_lat", "end_lng").agg(
     .drop("rank") \
     .orderBy("mes", F.desc("viagens"))
 
-top_chegada.show(5, truncate=False)
+print("  ✓ top_chegada preparado")
 
 # ─── 8. Distribuição por hora do dia e mês ────────────────────────────────────
 print("📊 [6/6] Distribuição por hora do dia...")
@@ -171,7 +170,7 @@ pico_hora = df.groupBy("mes", "hora", "member_casual").agg(
     spark_round(avg("duration_min"), 2).alias("duracao_media_min")
 ).orderBy("mes", "hora", "member_casual")
 
-pico_hora.show(10, truncate=False)
+print("  ✓ pico_hora preparado")
 
 # ─── 9. Top 1000 rotas por mês ────────────────────────────────────────────────
 print("📊 [+] Top 1000 rotas por mês...")
@@ -195,7 +194,7 @@ top_rotas = df.groupBy(
     .drop("rank") \
     .orderBy("mes", F.desc("viagens"))
 
-top_rotas.show(5, truncate=False)
+print("  ✓ top_rotas preparado")
 
 # ─── 10. Salva todos os resultados no HDFS ────────────────────────────────────
 print("\n💾 Salvando em hdfs://namenode:9000/citibike/processed/ ...")
@@ -204,8 +203,12 @@ PROCESSED = "hdfs://namenode:9000/citibike/processed"
 
 def salvar(df, nome):
     path = f"{PROCESSED}/{nome}"
-    df.coalesce(1).write.mode("overwrite").option("header", "true").json(path)
-    print(f"  ✓ {nome}")
+    try:
+        df.write.mode("overwrite").json(path)
+        print(f"  ✓ {nome}")
+    except Exception as e:
+        print(f"  ✗ Erro ao salvar {nome}: {e}")
+        raise
 
 salvar(resumo_mensal,      "resumo_mensal")
 salvar(duracao_por_tipo,   "duracao_por_tipo")

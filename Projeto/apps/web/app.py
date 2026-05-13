@@ -1,10 +1,11 @@
 """
 app.py — Dashboard CitiBike NYC com Streamlit
-Lê dados diretamente do HDFS e renderiza mapa + gráficos.
+Lê dados históricos processados pelo Spark do HDFS.
 """
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import json
 from hdfs import InsecureClient
 from datetime import datetime
@@ -17,9 +18,7 @@ st.set_page_config(
 )
 
 HDFS_URL  = "http://namenode:9870"
-HDFS_STATUS = "/citibike/station_status"
-HDFS_INFO   = "/citibike/station_info"
-HDFS_PROC   = "/citibike/processed"
+HDFS_PROC = "/citibike/processed"
 
 # ─── Conexão HDFS (cached para não reconectar a cada refresh) ─────────────────
 @st.cache_resource
@@ -28,218 +27,469 @@ def get_hdfs_client():
 
 client = get_hdfs_client()
 
-# ─── Funções de leitura ───────────────────────────────────────────────────────
-@st.cache_data(ttl=300)  # cache por 5 minutos — mesma frequência da coleta
-def carregar_ultimo_snapshot():
-    """
-    Lê station_status + station_info do HDFS e faz merge.
-    Retorna DataFrame com: station_id, name, lat, lon, free_bikes, empty_slots, ebikes
-    """
-    try:
-        # 1. Carregar station_status (dados em tempo real)
-        arquivos_status = sorted(client.list(HDFS_STATUS))
-        if not arquivos_status:
-            return pd.DataFrame()
-
-        with client.read(f"{HDFS_STATUS}/{arquivos_status[-1]}") as f:
-            status_data = json.load(f)
-        df_status = pd.DataFrame(status_data)
-
-        # 2. Carregar station_info (metadados: nome, lat, lon)
-        arquivos_info = sorted(client.list(HDFS_INFO))
-        if not arquivos_info:
-            return pd.DataFrame()
-
-        with client.read(f"{HDFS_INFO}/{arquivos_info[-1]}") as f:
-            info_data = json.load(f)
-        df_info = pd.DataFrame(info_data)
-
-        # 3. Merge via station_id
-        df = pd.merge(
-            df_status,
-            df_info[["station_id", "name", "lat", "lon", "capacity"]],
-            on="station_id",
-            how="inner"
-        )
-
-        # 4. Renomear colunas para compatibilidade com código existente
-        df = df.rename(columns={
-            "num_bikes_available": "free_bikes",
-            "num_docks_available": "empty_slots",
-            "num_ebikes_available": "ebikes"
-        })
-
-        # 5. Garantir tipos corretos
-        df["free_bikes"]  = pd.to_numeric(df["free_bikes"],  errors="coerce").fillna(0).astype(int)
-        df["empty_slots"] = pd.to_numeric(df["empty_slots"], errors="coerce").fillna(0).astype(int)
-        df["ebikes"]      = pd.to_numeric(df["ebikes"],      errors="coerce").fillna(0).astype(int)
-
-        return df
-    except Exception as e:
-        st.error(f"Erro ao ler HDFS: {e}")
-        return pd.DataFrame()
-
+# ─── Função de leitura de datasets processados ────────────────────────────────
 @st.cache_data(ttl=300)
-def carregar_processado(subdir):
+def ler_resultado(nome: str) -> pd.DataFrame:
     """
-    Lê arquivos JSON Lines gerados pelo Spark do HDFS.
-    O Spark salva no formato JSON Lines (uma linha = um objeto JSON),
-    não como um array. Por isso usamos json.loads() linha por linha.
-    Também ignora o arquivo _SUCCESS que o Spark cria como marcador.
+    Lê dataset processado do HDFS gerado pelo Spark.
+    O Spark salva em formato JSON Lines (uma linha = um objeto JSON).
     """
     try:
+        arquivos = client.list(f"{HDFS_PROC}/{nome}")
+
+        # Buscar arquivo part-* (ignora _SUCCESS e outros metadados)
+        part_files = [f for f in arquivos if f.startswith("part-")]
+        if not part_files:
+            return pd.DataFrame()
+
         registros = []
-        arquivos = client.list(f"{HDFS_PROC}/{subdir}")
-        for arq in arquivos:
-            # _SUCCESS é um arquivo vazio de controle do Spark — pular
-            if arq.startswith("_") or arq.startswith("."):
-                continue
-            with client.read(f"{HDFS_PROC}/{subdir}/{arq}") as f:
+        for part_file in part_files:
+            with client.read(f"{HDFS_PROC}/{nome}/{part_file}") as f:
                 conteudo = f.read().decode("utf-8")
                 for linha in conteudo.strip().split("\n"):
                     if linha.strip():
                         registros.append(json.loads(linha))
+
         return pd.DataFrame(registros)
-    except Exception as e:
-        st.warning(f"Erro ao ler {subdir}: {e}")
+    except Exception:
         return pd.DataFrame()
 
 # ─── HEADER ───────────────────────────────────────────────────────────────────
-st.title("🚴 CitiBike NYC — Big Data Dashboard")
-st.caption(f"Apache Spark + Hadoop HDFS | Atualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+st.title("🚴 CitiBike NYC — Análise Histórica Big Data")
+st.caption(f"Apache Spark + Hadoop HDFS | Período: Jan–Abr 2026 | Atualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
 st.divider()
 
-# ─── CARREGAR DADOS ───────────────────────────────────────────────────────────
-with st.spinner("Carregando dados do HDFS..."):
-    df = carregar_ultimo_snapshot()
-    df_top     = carregar_processado("top_stations")
-    df_vazias  = carregar_processado("estacoes_vazias")
+# ─── CARREGAR DATASETS ────────────────────────────────────────────────────────
+with st.spinner("Carregando dados processados do HDFS..."):
+    df_resumo = ler_resultado("resumo_mensal")
+    df_top_partida = ler_resultado("top_estacoes_partida")
+    df_top_chegada = ler_resultado("top_estacoes_chegada")
+    df_pico_hora = ler_resultado("pico_hora")
+    df_rotas = ler_resultado("top_rotas")
+    df_duracao = ler_resultado("duracao_por_tipo")
+    df_distancia = ler_resultado("distancia_por_tipo")
 
-if df.empty:
-    st.warning("⚠️ Nenhum snapshot de station_status disponível. Aguarde a próxima coleta (5 min) ou verifique o container citibike-ingest.")
-    st.info("Mapa e KPIs indisponíveis temporariamente. Gráficos de análise Spark (se disponíveis) serão exibidos abaixo.")
+# ─── VERIFICAÇÃO DE DADOS DISPONÍVEIS ─────────────────────────────────────────
+datasets_vazios = [
+    df_resumo.empty, df_top_partida.empty, df_top_chegada.empty,
+    df_pico_hora.empty, df_rotas.empty, df_duracao.empty, df_distancia.empty
+]
 
-# ─── KPIs ─────────────────────────────────────────────────────────────────────
-total_bikes  = int(df["free_bikes"].sum())
-total_vagas  = int(df["empty_slots"].sum())
-total_ebikes = int(df["ebikes"].sum()) if "ebikes" in df.columns else 0
+if all(datasets_vazios):
+    st.error("❌ Nenhum dataset processado encontrado em `/citibike/processed/`")
+    st.info("""
+    **Para gerar os dados, execute os seguintes comandos:**
 
-try:
-    snapshots = len(client.list(HDFS_STATUS))
-except:
-    snapshots = 0
+    ```bash
+    # 1. Ingerir dados históricos de viagens (Jan-Abr 2026)
+    docker compose exec ingest python3 fetch_trips.py
 
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("🚲 Bikes Disponíveis", f"{total_bikes:,}".replace(",", "."))
-col2.metric("⚡ E-Bikes",           f"{total_ebikes:,}".replace(",", "."))
-col3.metric("🅿️ Vagas Livres",      f"{total_vagas:,}".replace(",", "."))
-col4.metric("📍 Estações",          f"{len(df):,}".replace(",", "."))
-col5.metric("📁 Snapshots HDFS",    snapshots)
+    # 2. Processar com Spark (~15-25 min)
+    docker compose exec spark-master spark-submit \\
+      --master local[*] \\
+      /opt/spark-apps/process/analyze_citibike.py
+    ```
 
-st.divider()
+    Após a execução, atualize esta página.
+    """)
+    st.stop()
 
-# ─── MAPA ─────────────────────────────────────────────────────────────────────
-st.subheader("🗺️ Mapa de Estações em Tempo Real")
+# ─── SELETOR DE MÊS (SE DISPONÍVEL) ───────────────────────────────────────────
+meses_disponiveis = []
+if not df_resumo.empty and "mes" in df_resumo.columns:
+    meses_disponiveis = sorted(df_resumo["mes"].unique())
 
-# Classifica cada estação por disponibilidade para colorir o mapa
-df_mapa = df[["lat", "lon", "name", "free_bikes", "empty_slots"]].dropna(subset=["lat", "lon"])
-
-# Plotly scatter_mapbox — mapa interativo com zoom, hover e cores
-fig_mapa = px.scatter_map(
-    df_mapa,
-    lat="lat",
-    lon="lon",
-    color="free_bikes",
-    size=df_mapa["free_bikes"].clip(lower=1),
-    hover_name="name",
-    hover_data={"free_bikes": True, "empty_slots": True, "lat": False, "lon": False},
-    color_continuous_scale=["#f25f5c", "#f5a623", "#34c97a"],
-    range_color=[0, df_mapa["free_bikes"].quantile(0.95)],
-    map_style="carto-darkmatter",
-    zoom=11,
-    center={"lat": 40.73, "lon": -73.99},
-    height=500,
-    labels={"free_bikes": "Bikes", "empty_slots": "Vagas"}
-)
-fig_mapa.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, coloraxis_colorbar_title="Bikes")
-st.plotly_chart(fig_mapa,  width="stretch")
+if meses_disponiveis:
+    mes_selecionado = st.selectbox(
+        "📅 Selecione o mês para visualização detalhada",
+        meses_disponiveis,
+        index=len(meses_disponiveis) - 1  # Último mês por padrão
+    )
+else:
+    mes_selecionado = None
+    st.warning("⚠️ Dataset `resumo_mensal` não encontrado. Algumas visualizações podem estar indisponíveis.")
 
 st.divider()
 
-# ─── GRÁFICOS E TABELAS ───────────────────────────────────────────────────────
-col_esq, col_dir = st.columns(2)
+# ─── KPIs DO MÊS SELECIONADO ──────────────────────────────────────────────────
+if not df_resumo.empty and mes_selecionado:
+    st.subheader(f"📊 Indicadores — {mes_selecionado}")
 
-with col_esq:
-    st.subheader("📊 Top 10 Estações com Mais Bikes")
-    if not df_top.empty and "name" in df_top.columns:
-        df_top_sorted = df_top.sort_values("media_bikes", ascending=True).tail(10)
-        fig_bar = px.bar(
-            df_top_sorted,
-            x="media_bikes",
-            y="name",
-            orientation="h",
-            color="media_bikes",
-            color_continuous_scale=["#4f8ef7", "#34c97a"],
-            labels={"media_bikes": "Média de Bikes", "name": "Estação"},
-            height=400
+    dados_mes = df_resumo[df_resumo["mes"] == mes_selecionado].iloc[0]
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(
+        "🚴 Total de Viagens",
+        f"{int(dados_mes['total_viagens']):,}".replace(",", ".")
+    )
+    col2.metric(
+        "⏱️ Duração Média",
+        f"{dados_mes['duracao_media_min']:.1f} min",
+        delta=f"Mediana: {dados_mes['duracao_mediana_min']:.1f} min"
+    )
+    col3.metric(
+        "📏 Distância Média",
+        f"{dados_mes['distancia_media_km']:.2f} km",
+        delta=f"Mediana: {dados_mes['distancia_mediana_km']:.2f} km"
+    )
+    col4.metric(
+        "👥 % Membros",
+        f"{dados_mes['pct_member']:.1f}%",
+        delta=f"Casuais: {dados_mes['pct_casual']:.1f}%"
+    )
+
+    col5, col6 = st.columns(2)
+    col5.metric(
+        "📍 Estações de Partida Únicas",
+        f"{int(dados_mes['estacoes_partida_unicas']):,}".replace(",", ".")
+    )
+    col6.metric(
+        "🎯 Estações de Chegada Únicas",
+        f"{int(dados_mes['estacoes_chegada_unicas']):,}".replace(",", ".")
+    )
+
+    st.divider()
+
+# ─── EVOLUÇÃO MENSAL ──────────────────────────────────────────────────────────
+if not df_resumo.empty:
+    st.subheader("📈 Evolução Mensal do Sistema")
+
+    col_esq, col_dir = st.columns(2)
+
+    with col_esq:
+        # Gráfico de viagens mensais
+        fig_viagens = px.line(
+            df_resumo,
+            x="mes",
+            y="total_viagens",
+            markers=True,
+            title="Total de Viagens por Mês",
+            labels={"mes": "Mês", "total_viagens": "Viagens"}
         )
-        fig_bar.update_layout(
-            showlegend=False,
-            coloraxis_showscale=False,
-            yaxis_title="",
+        fig_viagens.update_traces(line_color="#4f8ef7", line_width=3)
+        fig_viagens.update_layout(
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
-            font_color="#e2e4f0"
+            font_color="#e2e4f0",
+            hovermode="x unified"
         )
-        st.plotly_chart(fig_bar,   width="stretch")
-    else:
-        st.info("Rode o job PySpark para gerar os dados processados.")
-        st.caption("Comando: spark-submit .../analyze_citibike.py")
+        st.plotly_chart(fig_viagens, use_container_width=True)
 
-with col_dir:
-    st.subheader("🚨 Estações Críticas (Frequentemente Vazias)")
-    if not df_vazias.empty and "name" in df_vazias.columns:
-        df_show = df_vazias[["name", "pct_vazia", "total_snapshots"]].sort_values(
-            "pct_vazia", ascending=False
-        ).head(10)
-        df_show.columns = ["Estação", "% Vazia", "Snapshots"]
-        st.dataframe(
-            df_show,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "% Vazia": st.column_config.ProgressColumn(
-                    "% do Tempo Vazia",
-                    min_value=0,
-                    max_value=100,
-                    format="%.1f%%"
-                )
+    with col_dir:
+        # Gráfico de % member vs casual
+        fig_composicao = go.Figure()
+        fig_composicao.add_trace(go.Scatter(
+            x=df_resumo["mes"],
+            y=df_resumo["pct_member"],
+            mode="lines+markers",
+            name="Membros",
+            line=dict(color="#34c97a", width=3)
+        ))
+        fig_composicao.add_trace(go.Scatter(
+            x=df_resumo["mes"],
+            y=df_resumo["pct_casual"],
+            mode="lines+markers",
+            name="Casuais",
+            line=dict(color="#f5a623", width=3)
+        ))
+        fig_composicao.update_layout(
+            title="Composição: Membros vs Casuais (%)",
+            xaxis_title="Mês",
+            yaxis_title="Percentual (%)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#e2e4f0",
+            hovermode="x unified",
+            legend=dict(x=0.7, y=1.0)
+        )
+        st.plotly_chart(fig_composicao, use_container_width=True)
+
+    st.divider()
+
+# ─── MAPA DE ESTAÇÕES MAIS MOVIMENTADAS ──────────────────────────────────────
+if not df_top_partida.empty and mes_selecionado:
+    st.subheader(f"🗺️ Top 20 Estações de Partida — {mes_selecionado}")
+
+    df_mapa = df_top_partida[df_top_partida["mes"] == mes_selecionado].copy()
+
+    if not df_mapa.empty:
+        fig_mapa = px.scatter_map(
+            df_mapa,
+            lat="start_lat",
+            lon="start_lng",
+            size="viagens",
+            color="viagens",
+            hover_name="start_station_name",
+            hover_data={
+                "viagens": True,
+                "duracao_media_min": ":.1f",
+                "distancia_media_km": ":.2f",
+                "start_lat": False,
+                "start_lng": False
+            },
+            color_continuous_scale=["#f5a623", "#f25f5c", "#c70039"],
+            map_style="carto-darkmatter",
+            zoom=11,
+            center={"lat": 40.73, "lon": -73.99},
+            height=500,
+            labels={
+                "viagens": "Viagens",
+                "duracao_media_min": "Duração Média (min)",
+                "distancia_media_km": "Distância Média (km)"
             }
         )
+        fig_mapa.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+        st.plotly_chart(fig_mapa, use_container_width=True)
     else:
-        st.info("Rode o job PySpark para gerar os dados processados.")
+        st.info(f"Nenhum dado de estações de partida para {mes_selecionado}")
 
-st.divider()
+    st.divider()
 
-# ─── ANÁLISE EXPLORATÓRIA EXTRA ───────────────────────────────────────────────
-st.subheader("📈 Distribuição de Bikes por Estação")
-fig_hist = px.histogram(
-    df_mapa,
-    x="free_bikes",
-    nbins=30,
-    color_discrete_sequence=["#4f8ef7"],
-    labels={"free_bikes": "Bikes Disponíveis", "count": "Nº de Estações"},
-    height=300
-)
-fig_hist.update_layout(
-    plot_bgcolor="rgba(0,0,0,0)",
-    paper_bgcolor="rgba(0,0,0,0)",
-    font_color="#e2e4f0",
-    bargap=0.1
-)
-st.plotly_chart(fig_hist,  width="stretch")
+# ─── RANKING DE ESTAÇÕES ──────────────────────────────────────────────────────
+if not df_top_partida.empty and mes_selecionado:
+    st.subheader(f"🏆 Top 10 Estações — {mes_selecionado}")
 
-# Botão para forçar atualização dos dados
-if st.button("🔄 Atualizar Dados do HDFS"):
+    col_partida, col_chegada = st.columns(2)
+
+    with col_partida:
+        st.markdown("**🚀 Mais Viagens Iniciadas**")
+        df_partida_top10 = df_top_partida[df_top_partida["mes"] == mes_selecionado].nlargest(10, "viagens")
+
+        fig_partida = px.bar(
+            df_partida_top10.sort_values("viagens"),
+            x="viagens",
+            y="start_station_name",
+            orientation="h",
+            color="viagens",
+            color_continuous_scale=["#4f8ef7", "#34c97a"],
+            labels={"viagens": "Viagens", "start_station_name": ""}
+        )
+        fig_partida.update_layout(
+            showlegend=False,
+            coloraxis_showscale=False,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#e2e4f0",
+            height=400
+        )
+        st.plotly_chart(fig_partida, use_container_width=True)
+
+    with col_chegada:
+        if not df_top_chegada.empty:
+            st.markdown("**🎯 Mais Viagens Finalizadas**")
+            df_chegada_top10 = df_top_chegada[df_top_chegada["mes"] == mes_selecionado].nlargest(10, "viagens")
+
+            fig_chegada = px.bar(
+                df_chegada_top10.sort_values("viagens"),
+                x="viagens",
+                y="end_station_name",
+                orientation="h",
+                color="viagens",
+                color_continuous_scale=["#f5a623", "#f25f5c"],
+                labels={"viagens": "Viagens", "end_station_name": ""}
+            )
+            fig_chegada.update_layout(
+                showlegend=False,
+                coloraxis_showscale=False,
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#e2e4f0",
+                height=400
+            )
+            st.plotly_chart(fig_chegada, use_container_width=True)
+
+    st.divider()
+
+# ─── DISTRIBUIÇÃO POR HORA DO DIA ─────────────────────────────────────────────
+if not df_pico_hora.empty and mes_selecionado:
+    st.subheader(f"🕐 Distribuição de Viagens por Hora — {mes_selecionado}")
+
+    df_hora_filtrado = df_pico_hora[df_pico_hora["mes"] == mes_selecionado]
+
+    if not df_hora_filtrado.empty:
+        # Pivot para ter member e casual como colunas separadas
+        df_pivot = df_hora_filtrado.pivot_table(
+            index="hora",
+            columns="member_casual",
+            values="viagens",
+            fill_value=0
+        ).reset_index()
+
+        fig_hora = go.Figure()
+
+        if "member" in df_pivot.columns:
+            fig_hora.add_trace(go.Scatter(
+                x=df_pivot["hora"],
+                y=df_pivot["member"],
+                mode="lines+markers",
+                name="Membros",
+                line=dict(color="#34c97a", width=3),
+                fill="tozeroy",
+                fillcolor="rgba(52, 201, 122, 0.2)"
+            ))
+
+        if "casual" in df_pivot.columns:
+            fig_hora.add_trace(go.Scatter(
+                x=df_pivot["hora"],
+                y=df_pivot["casual"],
+                mode="lines+markers",
+                name="Casuais",
+                line=dict(color="#f5a623", width=3),
+                fill="tozeroy",
+                fillcolor="rgba(245, 166, 35, 0.2)"
+            ))
+
+        fig_hora.update_layout(
+            xaxis_title="Hora do Dia",
+            yaxis_title="Número de Viagens",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#e2e4f0",
+            hovermode="x unified",
+            legend=dict(x=0.02, y=0.98),
+            height=400
+        )
+
+        st.plotly_chart(fig_hora, use_container_width=True)
+
+        st.caption("💡 **Insight:** Membros apresentam picos às 8h e 17h (commuting). Casuais têm distribuição mais uniforme (lazer).")
+
+    st.divider()
+
+# ─── DURAÇÃO E DISTÂNCIA POR TIPO DE USUÁRIO ──────────────────────────────────
+if not df_duracao.empty and mes_selecionado:
+    st.subheader(f"📊 Duração e Distância por Tipo de Usuário — {mes_selecionado}")
+
+    col_dur, col_dist = st.columns(2)
+
+    with col_dur:
+        df_dur_filtrado = df_duracao[df_duracao["mes"] == mes_selecionado]
+
+        if not df_dur_filtrado.empty:
+            fig_dur = px.bar(
+                df_dur_filtrado,
+                x="member_casual",
+                y="duracao_media_min",
+                color="member_casual",
+                color_discrete_map={"member": "#34c97a", "casual": "#f5a623"},
+                labels={
+                    "member_casual": "Tipo de Usuário",
+                    "duracao_media_min": "Duração Média (min)"
+                },
+                title="Duração Média das Viagens",
+                text="duracao_media_min"
+            )
+            fig_dur.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+            fig_dur.update_layout(
+                showlegend=False,
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#e2e4f0",
+                height=350
+            )
+            st.plotly_chart(fig_dur, use_container_width=True)
+
+    with col_dist:
+        if not df_distancia.empty:
+            df_dist_filtrado = df_distancia[df_distancia["mes"] == mes_selecionado]
+
+            if not df_dist_filtrado.empty:
+                fig_dist = px.bar(
+                    df_dist_filtrado,
+                    x="member_casual",
+                    y="distancia_media_km",
+                    color="member_casual",
+                    color_discrete_map={"member": "#34c97a", "casual": "#f5a623"},
+                    labels={
+                        "member_casual": "Tipo de Usuário",
+                        "distancia_media_km": "Distância Média (km)"
+                    },
+                    title="Distância Média Percorrida",
+                    text="distancia_media_km"
+                )
+                fig_dist.update_traces(texttemplate='%{text:.2f} km', textposition='outside')
+                fig_dist.update_layout(
+                    showlegend=False,
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font_color="#e2e4f0",
+                    height=350
+                )
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+    st.divider()
+
+# ─── TOP ROTAS ────────────────────────────────────────────────────────────────
+if not df_rotas.empty and mes_selecionado:
+    st.subheader(f"🛣️ Top 10 Rotas Mais Populares — {mes_selecionado}")
+
+    df_rotas_filtrado = df_rotas[df_rotas["mes"] == mes_selecionado].nlargest(10, "viagens")
+
+    if not df_rotas_filtrado.empty:
+        # Criar coluna com rota formatada
+        df_rotas_filtrado["rota"] = (
+            df_rotas_filtrado["start_station_name"] + " → " + df_rotas_filtrado["end_station_name"]
+        )
+
+        fig_rotas = px.bar(
+            df_rotas_filtrado.sort_values("viagens"),
+            x="viagens",
+            y="rota",
+            orientation="h",
+            color="pct_member",
+            color_continuous_scale=["#f5a623", "#34c97a"],
+            labels={
+                "viagens": "Número de Viagens",
+                "rota": "",
+                "pct_member": "% Membros"
+            },
+            hover_data={
+                "viagens": True,
+                "duracao_media_min": ":.1f",
+                "distancia_media_km": ":.2f",
+                "pct_member": ":.1f"
+            }
+        )
+        fig_rotas.update_layout(
+            coloraxis_colorbar_title="% Membros",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#e2e4f0",
+            height=450
+        )
+        st.plotly_chart(fig_rotas, use_container_width=True)
+
+        st.caption("💡 **Insight:** Rotas com alta % de membros (verde) são típicas de commuting. Rotas com mais casuais (laranja) são mais recreativas.")
+
+    st.divider()
+
+# ─── FOOTER COM INSTRUÇÕES ────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("""
+### 📌 Sobre os Dados
+
+- **Período analisado:** Janeiro a Abril de 2026
+- **Fonte:** Trip history CitiBike NYC (S3 AWS)
+- **Processamento:** Apache Spark 3.5.1 + PySpark DataFrame API
+- **Armazenamento:** Hadoop HDFS 3.2.1
+- **Total de viagens:** ~3,8 milhões (estimado)
+
+### 🔄 Atualizar Análises
+
+Para atualizar os dados com novos meses:
+
+```bash
+# 1. Baixar novos CSVs
+docker compose exec ingest python3 fetch_trips.py
+
+# 2. Reprocessar com Spark
+docker compose exec spark-master spark-submit \\
+  --master local[*] \\
+  /opt/spark-apps/process/analyze_citibike.py
+```
+""")
+
+# Botão para forçar atualização do cache
+if st.button("🔄 Limpar Cache e Recarregar"):
     st.cache_data.clear()
     st.rerun()
