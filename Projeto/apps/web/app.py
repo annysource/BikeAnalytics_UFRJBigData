@@ -483,7 +483,7 @@ Para atualizar os dados com novos meses:
 docker compose exec ingest python3 fetch_trips.py
 
 # 2. Reprocessar com Spark
-docker compose exec spark-master spark-submit \\
+docker compose exec spark-master /opt/spark/bin/spark-submit \\
   --master local[*] \\
   /opt/spark-apps/process/analyze_citibike.py
 ```

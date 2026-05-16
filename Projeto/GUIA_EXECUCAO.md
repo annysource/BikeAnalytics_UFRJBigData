@@ -382,9 +382,19 @@ docker compose exec ingest python3 fetch_trips.py
 **Depois que tiver dados de trips, rode o processamento Spark:**
 
 ```bash
-docker compose exec spark-master spark-submit \
+docker compose exec spark-master /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   --deploy-mode client \
+  /opt/spark-apps/process/analyze_citibike.py
+```
+
+**PS: Caso ocorra erro relacionado à memória insuficiente do Spark, execute o comando abaixo definindo explicitamente a memória do driver e dos executores:**
+
+```bash
+docker compose exec spark-master /opt/spark/bin/spark-submit \
+  --master spark://spark-master:7077 \
+  --executor-memory 512m \
+  --driver-memory 512m \
   /opt/spark-apps/process/analyze_citibike.py
 ```
 
